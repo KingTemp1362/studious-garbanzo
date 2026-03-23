@@ -1,395 +1,497 @@
-// ── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_KEY = 'schedule_events';
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-function loadEvents() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
-  catch { return {}; }
-}
+const MODEL = 'claude-opus-4-6';
+const API_URL = 'https://api.anthropic.com/v1/messages';
+const STORAGE_KEY_KEY = 'schedule_api_key';
+const STORAGE_SCHEDULE_KEY = 'schedule_events_v2';
+const STORAGE_HISTORY_KEY = 'schedule_history_v2';
 
-function saveEvents(events) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(events));
-}
+const SYSTEM_PROMPT = `You are a holistic daily schedule optimizer for a high-performance masculine male. The user is on a testosterone protocol running approximately 2000ng/dL — an enhanced athlete / TRT optimization protocol. Your role is to help him build and refine his optimal daily schedule.
 
-// events = { "2024-03-15": [ { id, title, time, note, sortKey }, ... ], ... }
-let events = loadEvents();
+## YOUR CONTEXT AND KNOWLEDGE BASE
 
-// ── Date Utilities ────────────────────────────────────────────────────────────
-function toKey(date) {
-  return date.toISOString().slice(0, 10); // "YYYY-MM-DD"
-}
+**Hormonal Timing:**
+- Cortisol awakening response (CAR) peaks ~30-45min post-wake — use this window for high-focus cognitive work, NOT max-effort training
+- Testosterone peaks mid-morning for optimized individuals; maintain favorable T:Cortisol ratio throughout day
+- Growth hormone primary pulse occurs 60-90min into deep sleep (NREM3) — protect 8-9hr sleep window
+- Cold exposure (AM): stimulates norepinephrine, testosterone response; do within 60min of waking
+- Blue light avoidance 90min pre-bed preserves melatonin onset
 
-function todayKey() { return toKey(new Date()); }
+**Training Optimization:**
+- Optimal resistance training window: 2–5 hours post-wake (after cortisol settles, T still elevated)
+- Avoid heavy training within 3 hours of sleep — elevated cortisol delays sleep onset
+- Pre-workout nutrition: carbs + moderate protein 60–90min before; stimulants 30–45min before
+- Post-workout anabolic window: 30–60 min — 40–60g protein + fast carbs is priority for enhanced athletes
+- Training fasted (AM) can work if cardio/conditioning; heavy compound work benefits from fed state
 
-function parseRelativeDate(str) {
-  const s = str.toLowerCase().trim();
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+**Nutrition Timing for Enhanced Athletes:**
+- Minimum 40g protein per meal to maximally stimulate MPS (muscle protein synthesis)
+- Protein distribution: every 3–5 hours, 40–60g per sitting
+- Pre-sleep protein: 30–40g casein or cottage cheese for overnight MPS
+- Dietary fat non-negotiable for hormone synthesis — include with at least 2 meals
+- Carbohydrates: cluster around training windows; reduce later in day unless pre-bed glucose helps sleep
+- Total protein target: 1.2–1.6g/lb bodyweight for enhanced athletes
 
-  if (/\btoday\b/.test(s)) return new Date(today);
-  if (/\btomorrow\b/.test(s)) { const d = new Date(today); d.setDate(d.getDate() + 1); return d; }
-  if (/\byesterday\b/.test(s)) { const d = new Date(today); d.setDate(d.getDate() - 1); return d; }
+**Supplementation Timing:**
+- Morning (with food/fats): Vitamin D3 + K2, Fish Oil/Omega-3
+- Pre-workout (30–45min prior): Creatine (if not taken AM), Pre-workout stimulants
+- Post-workout: Creatine (if not taken earlier), protein
+- Pre-sleep (60min before bed): Zinc (empty stomach or light food), Magnesium Glycinate, Vitamin C, any testosterone-support compounds
 
-  const nextMatch = s.match(/\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
-  if (nextMatch) return nextWeekday(today, nextMatch[1]);
+**Recovery Protocols:**
+- Cold water immersion / contrast therapy: ideally AM, avoids suppressing post-training inflammation response if done right after training
+- Sauna: post-training or evening (heat shock proteins, GH stimulus); not within 2hr of sleep
+- Walking / Zone 2 / active recovery: any time, but post-meal walks improve insulin sensitivity
+- Sleep environment: 65–68°F (18–20°C), complete darkness, no screens 90min prior
 
-  const thisMatch = s.match(/\b(?:this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
-  if (thisMatch) return nextOrThisWeekday(today, thisMatch[1]);
+**Masculine Performance Structure:**
+- First 90min post-wake: "Golden Hour" — cold exposure, sunlight, no phone, high-focus task or journaling
+- Deep work blocks: 90–120min uninterrupted (ultradian rhythm); schedule 2–3 per day
+- Decision fatigue compounds throughout day — schedule most important work and decisions AM
+- Evening: protect recovery window; wind-down, low stimulation, no new high-stress inputs after 8pm
 
-  const inDays = s.match(/\bin\s+(\d+)\s+days?\b/);
-  if (inDays) { const d = new Date(today); d.setDate(d.getDate() + parseInt(inDays[1])); return d; }
+## YOUR BEHAVIOR
 
-  // "March 15", "15th March", "3/15", "03-15" etc.
-  const explicit = parseExplicitDate(s, today.getFullYear());
-  if (explicit) return explicit;
+When the user tells you about their activities, routines, and lifestyle:
+1. Call the \`update_schedule\` tool with well-timed events based on what they've shared
+2. In your conversational response: acknowledge their inputs, explain the timing rationale, and ask smart follow-up questions to fill gaps in the schedule
+3. As the picture builds, proactively suggest what's missing (e.g., if they mention training but no post-workout nutrition, flag it)
+4. Build the schedule progressively — don't overwhelm with suggestions, guide them through it
 
-  return new Date(today); // default: today
-}
+Be direct, knowledgeable, and efficient. No fluff. Reference specific protocol considerations where relevant.`;
 
-function parseExplicitDate(s, year) {
-  const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-  for (let i = 0; i < months.length; i++) {
-    const re = new RegExp(`(${months[i]})\\s+(\\d{1,2})(?:st|nd|rd|th)?|(\\d{1,2})(?:st|nd|rd|th)?\\s+${months[i]}`);
-    const m = s.match(re);
-    if (m) {
-      const day = parseInt(m[2] || m[3]);
-      let d = new Date(year, i, day);
-      if (d < new Date()) d.setFullYear(year + 1); // auto-next-year if passed
-      return d;
+const TOOLS = [
+  {
+    name: 'update_schedule',
+    description: 'Add or update events in the daily schedule. Call this whenever the user shares information about their routine, activities, or when you want to place an optimized event on the timeline.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        events: {
+          type: 'array',
+          description: 'List of events to add to the schedule',
+          items: {
+            type: 'object',
+            properties: {
+              time: {
+                type: 'string',
+                description: 'Time in HH:MM 24-hour format, e.g. "06:30"'
+              },
+              title: {
+                type: 'string',
+                description: 'Short, clear event title, e.g. "Heavy Compound Training", "Protein + Carb Meal", "Cold Shower"'
+              },
+              category: {
+                type: 'string',
+                enum: ['morning_protocol', 'training', 'nutrition', 'recovery', 'work', 'sleep', 'supplementation', 'evening_protocol', 'other'],
+                description: 'Category of the event'
+              },
+              duration_min: {
+                type: 'number',
+                description: 'Duration in minutes (optional)'
+              },
+              notes: {
+                type: 'string',
+                description: 'Brief optimization note, e.g. "40g protein + 60g fast carbs post-training", "Cold exposure stimulates T and NE"'
+              }
+            },
+            required: ['time', 'title', 'category']
+          }
+        }
+      },
+      required: ['events']
     }
   }
-  // MM/DD or MM-DD
-  const slashMatch = s.match(/\b(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?\b/);
-  if (slashMatch) {
-    const mo = parseInt(slashMatch[1]) - 1;
-    const da = parseInt(slashMatch[2]);
-    const yr = slashMatch[3] ? parseInt(slashMatch[3].length === 2 ? '20' + slashMatch[3] : slashMatch[3]) : year;
-    return new Date(yr, mo, da);
-  }
-  return null;
+];
+
+const CATEGORY_META = {
+  morning_protocol: { label: 'Morning', color: '#d4a843' },
+  training:         { label: 'Training', color: '#e05c4e' },
+  nutrition:        { label: 'Nutrition', color: '#5caa6f' },
+  recovery:         { label: 'Recovery', color: '#4f9de0' },
+  work:             { label: 'Work', color: '#9b7fe8' },
+  sleep:            { label: 'Sleep', color: '#3a6aaa' },
+  supplementation:  { label: 'Supps', color: '#4fbfb5' },
+  evening_protocol: { label: 'Evening', color: '#7b6da8' },
+  other:            { label: 'Other', color: '#5c6080' }
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let apiKey = '';
+let scheduleEvents = [];    // { id, time, sortKey, title, category, duration_min, notes }
+let conversationHistory = []; // { role, content } — full messages array for API
+
+// ── Storage ───────────────────────────────────────────────────────────────────
+
+function loadState() {
+  apiKey = localStorage.getItem(STORAGE_KEY_KEY) || '';
+  try { scheduleEvents = JSON.parse(localStorage.getItem(STORAGE_SCHEDULE_KEY)) || []; } catch { scheduleEvents = []; }
+  try { conversationHistory = JSON.parse(localStorage.getItem(STORAGE_HISTORY_KEY)) || []; } catch { conversationHistory = []; }
 }
 
-const WEEKDAYS = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+function saveSchedule() { localStorage.setItem(STORAGE_SCHEDULE_KEY, JSON.stringify(scheduleEvents)); }
+function saveHistory()  { localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(conversationHistory)); }
+function saveKey(k)     { apiKey = k; localStorage.setItem(STORAGE_KEY_KEY, k); }
 
-function nextWeekday(from, name) {
-  const target = WEEKDAYS.indexOf(name);
-  const d = new Date(from);
-  d.setDate(d.getDate() + 1);
-  while (d.getDay() !== target) d.setDate(d.getDate() + 1);
-  return d;
+// ── Schedule Logic ────────────────────────────────────────────────────────────
+
+function timeToSortKey(timeStr) {
+  // "06:30" → "0630"
+  return (timeStr || '00:00').replace(':', '');
 }
 
-function nextOrThisWeekday(from, name) {
-  const target = WEEKDAYS.indexOf(name);
-  const d = new Date(from);
-  if (d.getDay() === target) return d;
-  return nextWeekday(from, name);
-}
-
-function parseTime(str) {
-  // Returns { display: "3:00 PM", sortKey: "15:00" } or null
-  const s = str.toLowerCase();
-
-  const match = s.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
-  if (match) {
-    let h = parseInt(match[1]);
-    const m = match[2] ? parseInt(match[2]) : 0;
-    const period = match[3];
-    if (period === 'pm' && h !== 12) h += 12;
-    if (period === 'am' && h === 12) h = 0;
-    return {
-      display: formatTime(h, m),
-      sortKey: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`
+function addOrUpdateEvents(events) {
+  for (const ev of events) {
+    const id = `${ev.time}-${ev.title}`.replace(/\s+/g, '-').toLowerCase();
+    const existing = scheduleEvents.findIndex(e => e.id === id);
+    const entry = {
+      id,
+      time: ev.time,
+      sortKey: timeToSortKey(ev.time),
+      title: ev.title,
+      category: ev.category || 'other',
+      duration_min: ev.duration_min || null,
+      notes: ev.notes || ''
     };
+    if (existing >= 0) scheduleEvents[existing] = entry;
+    else scheduleEvents.push(entry);
   }
-
-  // 24h: "14:30" or "9:00"
-  const h24 = s.match(/\b(\d{1,2}):(\d{2})\b/);
-  if (h24) {
-    const h = parseInt(h24[1]);
-    const m = parseInt(h24[2]);
-    return {
-      display: formatTime(h, m),
-      sortKey: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`
-    };
-  }
-
-  // word times
-  if (/\bnoon\b/.test(s)) return { display: '12:00 PM', sortKey: '12:00' };
-  if (/\bmidnight\b/.test(s)) return { display: '12:00 AM', sortKey: '00:00' };
-  if (/\bmorning\b/.test(s)) return { display: 'Morning', sortKey: '08:00' };
-  if (/\bafternoon\b/.test(s)) return { display: 'Afternoon', sortKey: '13:00' };
-  if (/\bevening\b/.test(s)) return { display: 'Evening', sortKey: '18:00' };
-  if (/\bnight\b/.test(s)) return { display: 'Night', sortKey: '20:00' };
-
-  return null;
+  scheduleEvents.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  saveSchedule();
 }
 
-function formatTime(h, m) {
-  const period = h >= 12 ? 'PM' : 'AM';
-  const h12 = h % 12 || 12;
-  return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+function clearSchedule() {
+  scheduleEvents = [];
+  saveSchedule();
 }
 
-function formatDateFull(date) {
-  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-}
+// ── Render Schedule ───────────────────────────────────────────────────────────
 
-function formatDateShort(date) {
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
+function renderSchedule() {
+  const empty = document.getElementById('timeline-empty');
+  const list  = document.getElementById('timeline-list');
 
-function formatDayName(date) {
-  const key = toKey(date);
-  const tk  = todayKey();
-  const d = new Date(date); d.setDate(d.getDate() + 1);
-  const tmk = toKey(d);
-  if (key === tk) return 'Today';
-  if (key === tmk.slice(0,10)) {
-    // compare properly
-  }
-  // yesterday/tomorrow
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const diff = Math.round((date - today) / 86400000);
-  if (diff === 0) return 'Today';
-  if (diff === 1) return 'Tomorrow';
-  if (diff === -1) return 'Yesterday';
-  return date.toLocaleDateString('en-US', { weekday: 'long' });
-}
-
-// ── Intent Parser ─────────────────────────────────────────────────────────────
-function parseIntent(input) {
-  const s = input.toLowerCase().trim();
-
-  // SHOW / VIEW
-  if (/\b(show|view|what'?s?|check|see|list)\b/.test(s) && !/\badd\b/.test(s)) {
-    if (/\b(all|upcoming|future|everything)\b/.test(s)) return { type: 'list_all' };
-    return { type: 'view', date: parseRelativeDate(s) };
-  }
-
-  // REMOVE / DELETE / CANCEL
-  if (/\b(remove|delete|cancel|clear)\b/.test(s)) {
-    const date = parseRelativeDate(s);
-    // strip command words to extract title
-    const title = s
-      .replace(/\b(remove|delete|cancel|clear)\b/, '')
-      .replace(/\b(on|from|for)\b.*$/, '')
-      .replace(/\b(today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next|this)\b.*$/, '')
-      .trim();
-    return { type: 'remove', title, date };
-  }
-
-  // ADD (default)
-  const date = parseRelativeDate(s);
-  const timeObj = parseTime(s);
-
-  // Extract title: strip time/date/command words
-  let title = input
-    .replace(/\b(add|schedule|create|put|set up|remind me(?: (to|about))?)\b/gi, '')
-    .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)/gi, '')
-    .replace(/\bat\s+(?:noon|midnight|morning|afternoon|evening|night)/gi, '')
-    .replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, '')
-    .replace(/\b(today|tomorrow|yesterday)\b/gi, '')
-    .replace(/\bnext\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, '')
-    .replace(/\b(?:this\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, '')
-    .replace(/\b(?:on|for|at|in)\b/gi, '')
-    .replace(/\bin\s+\d+\s+days?\b/gi, '')
-    .replace(/\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th)?\b/gi, '')
-    .replace(/\b\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?\b/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-
-  if (!title) title = 'Event';
-
-  return { type: 'add', title, date, timeObj };
-}
-
-// ── Event CRUD ────────────────────────────────────────────────────────────────
-function genId() { return Math.random().toString(36).slice(2, 9); }
-
-function addEvent(title, date, timeObj, note = '') {
-  const key = toKey(date);
-  if (!events[key]) events[key] = [];
-  const ev = {
-    id: genId(),
-    title: capitalize(title),
-    time: timeObj ? timeObj.display : 'All day',
-    sortKey: timeObj ? timeObj.sortKey : '00:00',
-    note
-  };
-  events[key].push(ev);
-  events[key].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-  saveEvents(events);
-  return ev;
-}
-
-function removeEvent(title, date) {
-  const key = toKey(date);
-  if (!events[key]) return null;
-  const idx = events[key].findIndex(e => e.title.toLowerCase().includes(title.toLowerCase()));
-  if (idx === -1) return null;
-  const [removed] = events[key].splice(idx, 1);
-  if (events[key].length === 0) delete events[key];
-  saveEvents(events);
-  return removed;
-}
-
-function getEventsForDate(date) {
-  return events[toKey(date)] || [];
-}
-
-function getAllUpcoming() {
-  const today = toKey(new Date());
-  return Object.entries(events)
-    .filter(([k]) => k >= today)
-    .sort(([a], [b]) => a.localeCompare(b));
-}
-
-function capitalize(s) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// ── Response Generator ────────────────────────────────────────────────────────
-function generateResponse(intent) {
-  switch (intent.type) {
-    case 'add': {
-      const ev = addEvent(intent.title, intent.date, intent.timeObj);
-      const dayStr = formatDayName(intent.date);
-      const dateStr = formatDateShort(intent.date);
-      const timeStr = ev.time;
-      return `Got it! I've added <b>${ev.title}</b> on <b>${dayStr}, ${dateStr}</b> at <b>${timeStr}</b>.`;
-    }
-    case 'remove': {
-      const removed = removeEvent(intent.title, intent.date);
-      if (!removed) {
-        const dayStr = formatDayName(intent.date);
-        return `I couldn't find an event matching "<b>${intent.title}</b>" on ${dayStr}. Check the schedule on the left and try again.`;
-      }
-      return `Done! Removed <b>${removed.title}</b> from the schedule.`;
-    }
-    case 'view': {
-      const evs = getEventsForDate(intent.date);
-      const dayStr = formatDayName(intent.date);
-      const dateStr = formatDateFull(intent.date);
-      if (evs.length === 0) return `Nothing scheduled for <b>${dayStr}</b> (${dateStr}).`;
-      const list = evs.map(e => `• <b>${e.time}</b> — ${e.title}`).join('<br>');
-      return `Here's <b>${dayStr}</b> (${dateStr}):<br><br>${list}`;
-    }
-    case 'list_all': {
-      const upcoming = getAllUpcoming();
-      if (upcoming.length === 0) return `No upcoming events scheduled.`;
-      let out = `Here are all your upcoming events:<br><br>`;
-      for (const [key, evs] of upcoming) {
-        const d = new Date(key + 'T00:00:00');
-        out += `<b>${formatDayName(d)}, ${formatDateShort(d)}</b><br>`;
-        out += evs.map(e => `&nbsp;&nbsp;• ${e.time} — ${e.title}`).join('<br>') + '<br><br>';
-      }
-      return out.trim();
-    }
-    default:
-      return `I'm not sure what you mean. Try: "Add meeting at 2pm tomorrow" or "What's on Friday?"`;
-  }
-}
-
-// ── UI: Day View ──────────────────────────────────────────────────────────────
-let viewDate = new Date();
-viewDate.setHours(0, 0, 0, 0);
-
-function renderDayView() {
-  const evs = getEventsForDate(viewDate);
-  const now = new Date();
-
-  document.getElementById('day-label').textContent = formatDayName(viewDate);
-  document.getElementById('date-label').textContent = viewDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-
-  const list = document.getElementById('schedule-list');
-  if (evs.length === 0) {
-    list.innerHTML = '<p class="empty-msg">No events — ask me to add one!</p>';
+  if (scheduleEvents.length === 0) {
+    empty.classList.remove('hidden');
+    list.classList.add('hidden');
+    list.innerHTML = '';
     return;
   }
 
-  list.innerHTML = evs.map(ev => {
-    const isPast = viewDate < now && toKey(viewDate) !== todayKey()
-      ? true
-      : (toKey(viewDate) === todayKey() && ev.sortKey < `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`);
+  empty.classList.add('hidden');
+  list.classList.remove('hidden');
+
+  list.innerHTML = scheduleEvents.map((ev, i) => {
+    const meta  = CATEGORY_META[ev.category] || CATEGORY_META.other;
+    const color = meta.color;
+    const label = meta.label;
+    const isLast = i === scheduleEvents.length - 1;
+
+    const durationStr = ev.duration_min ? `${ev.duration_min}min` : '';
+    const metaParts = [durationStr, ev.notes].filter(Boolean);
+
     return `
-      <div class="event-card${isPast ? ' past' : ''}" data-id="${ev.id}">
-        <div class="event-info">
-          <div class="event-time">${ev.time}</div>
-          <div class="event-title">${ev.title}</div>
-          ${ev.note ? `<div class="event-note">${ev.note}</div>` : ''}
+      <div class="tl-item">
+        <div class="tl-connector">
+          <div class="tl-dot" style="background:${color}"></div>
+          ${isLast ? '' : '<div class="tl-line"></div>'}
         </div>
-        <button class="delete-btn" data-key="${toKey(viewDate)}" data-id="${ev.id}" title="Remove">×</button>
+        <div class="tl-content cat-${ev.category}">
+          <div class="tl-time" style="color:${color}">${ev.time}</div>
+          <div class="tl-name">${escHtml(ev.title)}</div>
+          ${metaParts.length ? `<div class="tl-meta">${escHtml(metaParts.join(' · '))}</div>` : ''}
+          <span class="tl-badge" style="background:${color}22;color:${color}">${label}</span>
+        </div>
       </div>`;
   }).join('');
-
-  // Delete buttons
-  list.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.key;
-      if (!events[key]) return;
-      events[key] = events[key].filter(e => e.id !== btn.dataset.id);
-      if (events[key].length === 0) delete events[key];
-      saveEvents(events);
-      renderDayView();
-      appendBotMessage('Event removed.');
-    });
-  });
 }
 
-// ── UI: Chat ──────────────────────────────────────────────────────────────────
-function appendMessage(text, role) {
+// ── Claude API ────────────────────────────────────────────────────────────────
+
+async function callClaude(messages) {
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 2048,
+      system: SYSTEM_PROMPT,
+      tools: TOOLS,
+      messages
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const msg = err?.error?.message || `HTTP ${response.status}`;
+    throw new Error(msg);
+  }
+
+  const data = await response.json();
+  return data;
+}
+
+async function runConversation(userText) {
+  setThinking(true);
+  removeTypingIndicator();
+
+  // Add user message to history
+  conversationHistory.push({ role: 'user', content: userText });
+
+  let messages = [...conversationHistory];
+  let finalText = '';
+  let loopCount = 0;
+
+  try {
+    while (loopCount < 5) {
+      loopCount++;
+      const data = await callClaude(messages);
+
+      // Collect text from this response
+      const textBlocks = (data.content || []).filter(b => b.type === 'text');
+      if (textBlocks.length) {
+        finalText += textBlocks.map(b => b.text).join('');
+      }
+
+      if (data.stop_reason === 'tool_use') {
+        // Append assistant turn to messages
+        messages.push({ role: 'assistant', content: data.content });
+
+        // Process tool calls
+        const toolUseBlocks = data.content.filter(b => b.type === 'tool_use');
+        const toolResults = [];
+
+        for (const tu of toolUseBlocks) {
+          if (tu.name === 'update_schedule') {
+            const events = tu.input?.events || [];
+            if (events.length) {
+              addOrUpdateEvents(events);
+              renderSchedule();
+            }
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: tu.id,
+              content: `Schedule updated with ${events.length} event(s).`
+            });
+          } else {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: tu.id,
+              content: 'Tool executed.'
+            });
+          }
+        }
+
+        // Append tool results
+        messages.push({ role: 'user', content: toolResults });
+        continue; // loop again for final text response
+      }
+
+      // end_turn or other stop
+      break;
+    }
+
+    // Save the full assistant response to history (last assistant turn)
+    // Find the last assistant message we appended, or add the final text
+    if (finalText) {
+      // The conversation history should track the final assistant message
+      conversationHistory.push({ role: 'assistant', content: finalText });
+      saveHistory();
+    }
+
+    appendBotMessage(finalText || 'Done. Check the schedule on the left.');
+
+  } catch (err) {
+    const errMsg = err.message || 'Something went wrong.';
+    appendBotMessage(`<b>Error:</b> ${escHtml(errMsg)}<br><small>Check your API key or try again.</small>`);
+    setStatus('error');
+    // Remove last user message from history on error
+    conversationHistory.pop();
+    setTimeout(() => setStatus('idle'), 3000);
+  } finally {
+    setThinking(false);
+  }
+}
+
+// ── Chat UI ───────────────────────────────────────────────────────────────────
+
+function appendMessage(html, role) {
   const msgs = document.getElementById('chat-messages');
-  const div = document.createElement('div');
+  const div  = document.createElement('div');
   div.className = `msg ${role}`;
-  div.innerHTML = `<div class="bubble">${text}</div>`;
+  div.innerHTML  = `<div class="bubble">${html}</div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function appendBotMessage(text) {
+  // Convert basic markdown-ish formatting
+  const html = formatText(text);
+  appendMessage(html, 'bot');
+}
+
+function appendUserMessage(text) {
+  appendMessage(escHtml(text).replace(/\n/g, '<br>'), 'user');
+}
+
+function showTypingIndicator() {
+  const msgs = document.getElementById('chat-messages');
+  const div  = document.createElement('div');
+  div.className = 'msg bot';
+  div.id = 'typing-indicator-msg';
+  div.innerHTML = `<div class="bubble"><div class="typing-indicator"><span></span><span></span><span></span></div></div>`;
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
 }
 
-function appendBotMessage(text) { appendMessage(text, 'bot'); }
-function appendUserMessage(text) { appendMessage(escapeHtml(text), 'user'); }
-
-function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function removeTypingIndicator() {
+  const el = document.getElementById('typing-indicator-msg');
+  if (el) el.remove();
 }
 
-// ── Event Listeners ───────────────────────────────────────────────────────────
-document.getElementById('chat-form').addEventListener('submit', e => {
-  e.preventDefault();
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
+function setThinking(on) {
+  setStatus(on ? 'thinking' : 'idle');
+  document.getElementById('send-btn').disabled = on;
+  document.getElementById('chat-input').disabled = on;
+  if (on) showTypingIndicator();
+  else    removeTypingIndicator();
+}
 
-  appendUserMessage(text);
+function setStatus(state) {
+  const dot = document.getElementById('status-dot');
+  dot.className = `status-dot ${state}`;
+}
 
-  const intent = parseIntent(text);
-  const response = generateResponse(intent);
-  appendBotMessage(response);
+function formatText(text) {
+  if (!text) return '';
+  return escHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^#{1,3}\s+(.+)$/gm, '<b>$1</b>')
+    .replace(/^[-•]\s+(.+)$/gm, '• $1')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+}
 
-  // Navigate sidebar to relevant date
-  if (intent.type === 'add' || intent.type === 'view') {
-    viewDate = new Date(intent.date);
+function escHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+// ── Restore conversation from history ────────────────────────────────────────
+
+function restoreChat() {
+  if (!conversationHistory.length) return;
+  const msgs = document.getElementById('chat-messages');
+  // Clear default welcome message
+  msgs.innerHTML = '';
+
+  for (const msg of conversationHistory) {
+    if (msg.role === 'user' && typeof msg.content === 'string') {
+      appendUserMessage(msg.content);
+    } else if (msg.role === 'assistant' && typeof msg.content === 'string') {
+      appendBotMessage(msg.content);
+    }
   }
-  renderDayView();
-});
+}
 
-document.getElementById('prev-day').addEventListener('click', () => {
-  viewDate.setDate(viewDate.getDate() - 1);
-  renderDayView();
-});
+// ── Setup / API Key Flow ──────────────────────────────────────────────────────
 
-document.getElementById('next-day').addEventListener('click', () => {
-  viewDate.setDate(viewDate.getDate() + 1);
-  renderDayView();
-});
+function showSetup() {
+  document.getElementById('setup-overlay').classList.remove('hidden');
+  document.getElementById('api-key-input').focus();
+}
 
-document.getElementById('today-btn').addEventListener('click', () => {
-  viewDate = new Date();
-  viewDate.setHours(0, 0, 0, 0);
-  renderDayView();
-});
+function hideSetup() {
+  document.getElementById('setup-overlay').classList.add('hidden');
+}
+
+// ── Auto-resize textarea ──────────────────────────────────────────────────────
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-renderDayView();
+
+(function init() {
+  loadState();
+
+  const overlay    = document.getElementById('setup-overlay');
+  const apiInput   = document.getElementById('api-key-input');
+  const saveKeyBtn = document.getElementById('save-key-btn');
+  const form       = document.getElementById('chat-form');
+  const input      = document.getElementById('chat-input');
+  const clearBtn   = document.getElementById('clear-schedule-btn');
+  const changeBtn  = document.getElementById('change-key-btn');
+
+  // Setup flow
+  if (!apiKey) {
+    showSetup();
+  } else {
+    hideSetup();
+    restoreChat();
+    renderSchedule();
+  }
+
+  saveKeyBtn.addEventListener('click', () => {
+    const key = apiInput.value.trim();
+    if (!key.startsWith('sk-')) {
+      apiInput.style.borderColor = '#e05c4e';
+      return;
+    }
+    apiInput.style.borderColor = '';
+    saveKey(key);
+    hideSetup();
+    renderSchedule();
+    restoreChat();
+  });
+
+  apiInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveKeyBtn.click();
+  });
+
+  changeBtn.addEventListener('click', () => {
+    apiInput.value = apiKey;
+    showSetup();
+  });
+
+  clearBtn.addEventListener('click', () => {
+    if (!confirm('Clear all schedule events?')) return;
+    clearSchedule();
+    renderSchedule();
+  });
+
+  // Chat form
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || !apiKey) return;
+    input.value = '';
+    input.style.height = 'auto';
+    appendUserMessage(text);
+    await runConversation(text);
+  });
+
+  // Shift+Enter for newline, Enter to send
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      form.dispatchEvent(new Event('submit'));
+    }
+  });
+
+  input.addEventListener('input', () => autoResize(input));
+})();
