@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interactive Schedule</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar: Day View -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <button id="prev-day" class="nav-btn">&#8592;</button>
+        <div class="date-display">
+          <div id="day-label" class="day-label"></div>
+          <div id="date-label" class="date-label"></div>
+        </div>
+        <button id="next-day" class="nav-btn">&#8594;</button>
+      </div>
+      <button id="today-btn" class="today-btn">Today</button>
+      <div id="schedule-list" class="schedule-list">
+        <p class="empty-msg">No events yet. Ask me to add one!</p>
+      </div>
+    </aside>
+
+    <!-- Main: Chat -->
+    <main class="chat-panel">
+      <div class="chat-header">
+        <span class="chat-title">Schedule Assistant</span>
+        <span class="chat-subtitle">Tell me what to add, remove, or show</span>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <div class="msg bot">
+          <div class="bubble">
+            Hey! I'm your schedule assistant. Here's what I can do:<br><br>
+            • <b>Add an event:</b> "Add dentist at 3pm Friday"<br>
+            • <b>View a day:</b> "What's on Thursday?" or "Show next Monday"<br>
+            • <b>Remove an event:</b> "Remove dentist on Friday"<br>
+            • <b>List all:</b> "Show all upcoming events"<br><br>
+            What would you like to schedule?
+          </div>
+        </div>
+      </div>
+      <form id="chat-form" class="chat-form">
+        <input
+          id="chat-input"
+          class="chat-input"
+          type="text"
+          placeholder="e.g. Add team meeting at 10am tomorrow..."
+          autocomplete="off"
+        />
+        <button type="submit" class="send-btn">Send</button>
+      </form>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
